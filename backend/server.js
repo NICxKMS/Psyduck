@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -10,10 +11,20 @@ const notificationRoutes = require('./routes/notifications');
 const codeRoutes = require('./routes/code');
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 // Middlewares
-app.use(cors()); // Allow requests from the frontend
+// Configure CORS to allow the separate frontend origin(s)
+const allowedOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(',').map((origin) => origin.trim())
+  : ['http://localhost:5173'];
+app.use(
+  cors({
+    origin: allowedOrigins,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+); // Allow requests from the configured frontend origin(s)
 app.use(express.json()); // Parse JSON bodies
 
 // Health check route
@@ -28,6 +39,15 @@ app.use('/projects', projectRoutes);
 app.use('/gamification', gamificationRoutes);
 app.use('/notifications', notificationRoutes);
 app.use('/code', codeRoutes);
+
+// Optional: serve built frontend only when explicitly enabled
+if (process.env.SERVE_STATIC === 'true') {
+  const distPath = path.join(__dirname, '..', 'dist');
+  app.use(express.static(distPath));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+}
 
 
 app.listen(PORT, () => {

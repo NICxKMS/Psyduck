@@ -41,6 +41,18 @@ const achievements = {}; // Keyed by userId
 // In-memory 'database' for notifications
 const notifications = {}; // Keyed by userId
 
+// In-memory stores for code IDE features
+const codeHistory = {}; // projectId -> CodeHistory[]
+const sharedCodes = {}; // shareId -> { code, language, projectTitle, milestoneTitle, sharedBy, sharedAt }
+const codeSnippets = {}; // language -> Snippet[]
+const executions = {}; // executionId -> ExecutionResult
+const languageTemplates = {
+  javascript: "console.log('Hello, World!')\n",
+  python: "print('Hello, World!')\n",
+  java: 'public class Main {\n  public static void main(String[] args) {\n    System.out.println("Hello, World!");\n  }\n}\n',
+  cpp: '#include <iostream>\nint main(){ std::cout << "Hello, World!"; }\n',
+};
+
 module.exports = {
   users,
   projects,
@@ -50,4 +62,9 @@ module.exports = {
   badges,
   achievements,
   notifications,
+  codeHistory,
+  sharedCodes,
+  codeSnippets,
+  executions,
+  languageTemplates,
 };

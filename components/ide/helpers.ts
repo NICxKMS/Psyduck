@@ -1,19 +1,4 @@
-import { LANGUAGE_TEMPLATES, MONACO_LANGUAGE_MAP, FILE_EXTENSIONS } from './constants';
-
-export const getMonacoLanguage = (language: string): string => {
-  if (!language || typeof language !== 'string') {
-    console.warn('⚠️ Invalid language provided to getMonacoLanguage:', language);
-    return 'javascript';
-  }
-  
-  const monacoLang = MONACO_LANGUAGE_MAP[language.toLowerCase()];
-  if (!monacoLang) {
-    console.warn('⚠️ Unsupported language, falling back to javascript:', language);
-    return 'javascript';
-  }
-  
-  return monacoLang;
-};
+import { LANGUAGE_TEMPLATES, FILE_EXTENSIONS } from './constants';
 
 export const getDefaultCode = (language: string): string => {
   if (!language || typeof language !== 'string') {
@@ -94,32 +79,10 @@ export const getDifficultyColor = (difficulty: string): string => {
   }
 };
 
-// Utility function to check if Monaco Editor is available
-export const isMonacoAvailable = (): boolean => {
-  return typeof window !== 'undefined' && 
-         window.monaco && 
-         window.monaco.editor && 
-         typeof window.monaco.editor.create === 'function';
-};
-
-// Utility function to safely dispose Monaco Editor
-export const disposeMonacoEditor = (editor: any): void => {
-  try {
-    if (editor && typeof editor.dispose === 'function') {
-      editor.dispose();
-      console.log('✅ Monaco Editor disposed');
-    }
-  } catch (error) {
-    console.error('❌ Error disposing Monaco Editor:', error);
-  }
-};
-
-// Utility function to validate language support
+// Utility function to validate language support (based on known extensions)
 export const isLanguageSupported = (language: string): boolean => {
-  if (!language || typeof language !== 'string') {
-    return false;
-  }
-  return language.toLowerCase() in MONACO_LANGUAGE_MAP;
+  if (!language || typeof language !== 'string') return false;
+  return language.toLowerCase() in FILE_EXTENSIONS;
 };
 
 // Utility function to get language display name
@@ -211,77 +174,4 @@ export const validateCode = (code: string, language: string): { isValid: boolean
   };
 };
 
-// Utility function to safely get editor model
-export const getEditorModel = (editor: any): any | null => {
-  try {
-    if (!editor || typeof editor.getModel !== 'function') {
-      return null;
-    }
-    return editor.getModel();
-  } catch (error) {
-    console.error('❌ Failed to get editor model:', error);
-    return null;
-  }
-};
-
-// Utility function to safely get current editor language
-export const getCurrentEditorLanguage = (editor: any): string | null => {
-  try {
-    const model = getEditorModel(editor);
-    if (!model) {
-      return null;
-    }
-    
-    // Try different methods to get language ID
-    if (typeof model.getLanguageId === 'function') {
-      return model.getLanguageId();
-    }
-    
-    if (typeof model.getModeId === 'function') {
-      return model.getModeId();
-    }
-    
-    return null;
-  } catch (error) {
-    console.error('❌ Failed to get current editor language:', error);
-    return null;
-  }
-};
-
-// Utility function to safely update editor language
-export const updateEditorLanguage = (editor: any, language: string): boolean => {
-  try {
-    if (!editor || !window.monaco) {
-      console.error('❌ Editor or Monaco not available');
-      return false;
-    }
-    
-    const model = getEditorModel(editor);
-    if (!model) {
-      console.error('❌ Cannot get editor model');
-      return false;
-    }
-    
-    const monacoLanguage = getMonacoLanguage(language);
-    const currentLanguage = getCurrentEditorLanguage(editor);
-    
-    // Only update if language is different
-    if (currentLanguage === monacoLanguage) {
-      console.log('🔄 Language already set to:', monacoLanguage);
-      return true;
-    }
-    
-    // Try to set language
-    if (window.monaco.editor && typeof window.monaco.editor.setModelLanguage === 'function') {
-      window.monaco.editor.setModelLanguage(model, monacoLanguage);
-      console.log('✅ Editor language updated to:', monacoLanguage);
-      return true;
-    }
-    
-    console.error('❌ setModelLanguage method not available');
-    return false;
-  } catch (error) {
-    console.error('❌ Failed to update editor language:', error);
-    return false;
-  }
-};
+// Monaco-specific helpers removed

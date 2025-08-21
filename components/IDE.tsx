@@ -1,28 +1,19 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent } from './ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { Badge } from './ui/badge';
 import { ScrollArea } from './ui/scroll-area';
-import { FileText, Terminal } from 'lucide-react';
+import { FileText, Terminal, Plus, Trash2, Copy, Folder, FileCode, PlayCircle, Bug, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { codeService, type CodeSubmission, type ExecutionResult, type SupportedLanguage } from '../services/codeService';
+import { apiClient } from '../services/api/ApiClient';
 import { config } from '../config/environment';
 import { IDEHeader } from './ide/IDEHeader';
-import { ExecutionResultPanel } from './ide/ExecutionResult';
-import { SidePanel } from './ide/SidePanel';
 import CodeEditor from './ide/CodeEditor';
-import { getMonacoLanguage, getDefaultCode, downloadCode } from './ide/helpers';
-import { MONACO_EDITOR_CONFIG } from './ide/constants';
-
-// Monaco Editor type declarations
-declare global {
-  interface Window {
-    monaco: any;
-    require: any;
-    MonacoEnvironment?: any;
-  }
-}
+import { getDefaultCode, downloadCode } from './ide/helpers';
+import { Button } from './ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 
 interface IDEProps {
   projectId?: string;
@@ -37,23 +28,50 @@ export function IDE({
   initialLanguage = 'javascript',
   initialCode = ''
 }: IDEProps) {
-  const [isMonacoLoaded, setIsMonacoLoaded] = useState(false);
-  const [monacoLoadError, setMonacoLoadError] = useState<string | null>(null);
-  const [useBasicEditor, setUseBasicEditor] = useState(false);
-  const [editor, setEditor] = useState<any>(null);
-  const [editorModel, setEditorModel] = useState<any>(null);
   const [editorReady, setEditorReady] = useState(false);
   const [currentLanguage, setCurrentLanguage] = useState(initialLanguage);
   const [code, setCode] = useState(initialCode);
   const [isExecuting, setIsExecuting] = useState(false);
   const [executionResult, setExecutionResult] = useState<ExecutionResult | null>(null);
   const [activeTab, setActiveTab] = useState('editor');
-  const [initializationAttempts, setInitializationAttempts] = useState(0);
-  
-  const editorRef = useRef<HTMLDivElement>(null);
+  const [minimapEnabled, setMinimapEnabled] = useState(true);
+  const [wordWrapEnabled, setWordWrapEnabled] = useState(true);
+  const [editorTheme, setEditorTheme] = useState<'light' | 'dark' | 'system'>(() => {
+    try { return (localStorage.getItem('psyduck-ide-theme') as any) || 'system'; } catch { return 'system'; }
+  });
+  const [fontSize, setFontSize] = useState<number>(() => {
+    try { return Number(localStorage.getItem('psyduck-ide-fontSize') || 14); } catch { return 14; }
+  });
+  const [tabSize, setTabSize] = useState<number>(() => {
+    try { return Number(localStorage.getItem('psyduck-ide-tabSize') || 2); } catch { return 2; }
+  });
+  const [status, setStatus] = useState({ line: 1, column: 1, length: 0, selectionLength: 0 });
+  const [markers, setMarkers] = useState<Array<{ message: string; severity: number; startLineNumber: number; startColumn: number }>>([]);
+  const [inputText, setInputText] = useState<string>('');
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    try { return Number(localStorage.getItem('psyduck-ide-sidebarWidth') || 240); } catch { return 240; }
+  });
+  const [isResizing, setIsResizing] = useState<boolean>(false);
+
+  // Workspace and files state
+  const ROOT_FOLDER = 'workspace';
+  const normalizePath = (p: string) => {
+    const cleaned = (p || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    const safe = cleaned.replace(/\.\./g, '');
+    return `${ROOT_FOLDER}/${safe}`.replace(/\/+/, '/');
+  };
+  const basename = (p: string) => (p || '').split('/').filter(Boolean).slice(-1)[0] || '';
+  const parentDir = (p: string) => (p || '').split('/').filter(Boolean).slice(0, -1).join('/') || ROOT_FOLDER;
+
+  type EditorFile = { id: string; path: string; language: string; value: string };
+  const [files, setFiles] = useState<EditorFile[]>([
+    { id: 'main', path: `${ROOT_FOLDER}/main.js`, language: 'javascript', value: initialCode || getDefaultCode('javascript') }
+  ]);
+  const [activeFileId, setActiveFileId] = useState<string>('main');
+  const [folders, setFolders] = useState<string[]>([ROOT_FOLDER]);
+  const [newFileFolder, setNewFileFolder] = useState<string>(ROOT_FOLDER);
+  const [entryPath, setEntryPath] = useState<string>(`${ROOT_FOLDER}/main.js`);
   const queryClient = useQueryClient();
-  const monacoInitRef = useRef(false);
-  const editorInitRef = useRef(false);
 
   // Load supported languages with better error handling
   const { 
@@ -105,506 +123,26 @@ export function IDE({
     }
   }, [languagesError]);
 
-  // Utility functions for safe Monaco operations
-  const isEditorValid = useCallback((editorInstance?: any): boolean => {
-    const targetEditor = editorInstance || editor;
-    return !!(
-      targetEditor &&
-      typeof targetEditor.getModel === 'function' &&
-      (!targetEditor.isDisposed || !targetEditor.isDisposed())
-    );
-  }, [editor]);
-
-  const getValidModel = useCallback((editorInstance?: any): any | null => {
-    try {
-      const targetEditor = editorInstance || editor;
-      if (!isEditorValid(targetEditor)) {
-        console.log('🔍 Editor is not valid for model retrieval');
-        return null;
-      }
-
-      const model = targetEditor.getModel();
-      if (!model) {
-        console.log('🔍 Editor model is null');
-        return null;
-      }
-
-      // Check if model has required methods
-      if (typeof model.getLanguageId !== 'function' && typeof model.getModeId !== 'function') {
-        console.log('🔍 Model lacks language identification methods');
-        return null;
-      }
-
-      console.log('✅ Valid model retrieved');
-      return model;
-    } catch (error) {
-      console.error('❌ Error getting model:', error);
-      return null;
-    }
-  }, [editor, isEditorValid]);
-
-  // FIXED: Improved Monaco Editor loading with proper NLS configuration
+  // Prefer real backend for code execution during IDE session
   useEffect(() => {
-    const loadMonaco = async () => {
-      if (window.monaco) {
-        console.log('✅ Monaco Editor already loaded');
-        setIsMonacoLoaded(true);
-        setMonacoLoadError(null);
-        return;
-      }
-
-      if (monacoInitRef.current) {
-        console.log('🔄 Monaco Editor already loading...');
-        return;
-      }
-
-      monacoInitRef.current = true;
-      console.log('🔄 Loading Monaco Editor from:', config.monaco.cdnUrl);
-
-      // Add comprehensive error suppression for worker-related errors
-      const originalWindowError = window.onerror;
-      const originalUnhandledRejection = window.onunhandledrejection;
-      
-      window.onerror = function(message, source, lineno, colno, error) {
-        const msgStr = String(message);
-        if (msgStr.includes('Worker') || 
-            msgStr.includes('cannot be accessed from origin') ||
-            msgStr.includes('Failed to construct') ||
-            msgStr.includes('web worker')) {
-          return true; // Prevent the error from being logged
-        }
-        return originalWindowError ? originalWindowError.call(this, message, source, lineno, colno, error) : false;
-      };
-      
-      window.onunhandledrejection = function(event) {
-        const reason = String(event.reason);
-        if (reason.includes('Worker') || 
-            reason.includes('cannot be accessed from origin') ||
-            reason.includes('Failed to construct') ||
-            reason.includes('web worker')) {
-          event.preventDefault();
-          return;
-        }
-        return originalUnhandledRejection ? originalUnhandledRejection.call(this, event) : undefined;
-      };
-
-      try {
-        // FIXED: Comprehensive Monaco Environment setup for iframe compatibility
-        window.MonacoEnvironment = {
-          getWorkerUrl: function () {
-            // Always return a no-op worker to prevent CORS issues
-            return `data:text/javascript;charset=utf-8,${encodeURIComponent(`
-              // No-op worker implementation to prevent loading errors
-              self.addEventListener('message', function(e) {
-                // Echo back success to prevent hangs
-                if (e.data && e.data.id) {
-                  self.postMessage({
-                    id: e.data.id,
-                    result: null,
-                    error: null
-                  });
-                }
-              });
-            `)}`;
-          },
-          getWorker: function () {
-            // Create a minimal worker that prevents errors
-            try {
-              return new Worker(`data:text/javascript;charset=utf-8,${encodeURIComponent(`
-                // Minimal worker to prevent Monaco errors
-                self.addEventListener('message', function(e) {
-                  // Always respond to prevent hangs
-                  self.postMessage(e.data);
-                });
-              `)}`);
-            } catch (error) {
-              // If worker creation fails, return a mock worker
-              return {
-                postMessage: function() {},
-                terminate: function() {},
-                addEventListener: function() {},
-                removeEventListener: function() {}
-              } as any;
-            }
-          }
-        };
-
-        let loaderScript = document.querySelector('script[src*="loader.js"]') as HTMLScriptElement | null;
-        
-        if (!loaderScript) {
-          loaderScript = document.createElement('script');
-          loaderScript.src = `${config.monaco.cdnUrl}/loader.js`;
-          loaderScript.async = true;
-          
-          const loadPromise = new Promise<void>((resolve, reject) => {
-            loaderScript!.onload = () => {
-              console.log('✅ Monaco loader script loaded');
-              resolve();
-            };
-            loaderScript!.onerror = (error) => {
-              console.error('❌ Failed to load Monaco loader script:', error);
-              reject(new Error('Failed to load Monaco loader script'));
-            };
-          });
-
-          document.head.appendChild(loaderScript);
-          await loadPromise;
-        }
-
-        if (window.require) {
-          // FIXED: Comprehensive RequireJS configuration to prevent all loading errors
-          window.require.config({ 
-            paths: { 
-              vs: config.monaco.cdnUrl 
-            },
-            // FIXED: Disable NLS and worker loading to prevent all iframe issues
-            'vs/nls': {
-              availableLanguages: {}
-            },
-            // Disable web workers entirely in iframe environments
-            'vs/editor/editor.worker': 'vs/editor/editor.worker.noop',
-            'vs/language/typescript/ts.worker': 'vs/language/typescript/ts.worker.noop',
-            'vs/language/json/json.worker': 'vs/language/json/json.worker.noop',
-            'vs/language/css/css.worker': 'vs/language/css/css.worker.noop',
-            'vs/language/html/html.worker': 'vs/language/html/html.worker.noop'
-          });
-          
-          await new Promise<void>((resolve, reject) => {
-            const timeout = setTimeout(() => {
-              reject(new Error('Monaco Editor loading timeout'));
-            }, 20000);
-
-            // FIXED: Load editor with proper error handling for NLS
-            window.require(['vs/editor/editor.main'], () => {
-              clearTimeout(timeout);
-              
-              // FIXED: Additional safety check and NLS override
-              if (window.monaco) {
-                try {
-                  // Override any NLS configuration that might cause issues
-                  if (window.monaco.editor && window.monaco.editor.setTheme) {
-                    console.log('✅ Monaco Editor modules loaded successfully');
-                  }
-                } catch (nlsError) {
-                  console.warn('⚠️ NLS warning (non-critical):', nlsError);
-                }
-              }
-              
-              console.log('✅ Monaco Editor loaded successfully');
-              setIsMonacoLoaded(true);
-              setMonacoLoadError(null);
-              resolve();
-            }, (error: any) => {
-              clearTimeout(timeout);
-              console.error('❌ Failed to load Monaco Editor modules:', error);
-              reject(error);
-            });
-          });
-        } else {
-          throw new Error('RequireJS not available');
-        }
-      } catch (error) {
-        console.error('❌ Failed to load Monaco Editor:', error);
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        setMonacoLoadError(errorMessage);
-        toast.error(`Failed to load code editor: ${errorMessage}`);
-      } finally {
-        // Restore original error handlers
-        window.onerror = originalWindowError;
-        window.onunhandledrejection = originalUnhandledRejection;
-        monacoInitRef.current = false;
-      }
-    };
-
-    loadMonaco();
+    try {
+      const prev = apiClient.isUsingMockApi();
+      if (prev) apiClient.setUseMockApi(false);
+      return () => { try { apiClient.setUseMockApi(prev); } catch {} };
+    } catch {}
   }, []);
 
-  // Monaco Editor initialization with better error handling
+  // Update code when latest code arrives (no direct editor access)
   useEffect(() => {
-    // Only proceed if Monaco is loaded and we have a container
-    if (!isMonacoLoaded || !editorRef.current || editorInitRef.current) {
-      return;
+    if (latestCode && !isLoadingCode) {
+      const updated: EditorFile = { id: files[0].id, path: `${ROOT_FOLDER}/main.${files[0].language === 'typescript' ? 'ts' : 'js'}`, value: latestCode.code, language: latestCode.language };
+      setFiles([updated, ...files.slice(1)]);
+      setCurrentLanguage(updated.language);
+      setCode(updated.value);
+      setEntryPath(updated.path);
     }
-
-    // Prevent multiple initialization attempts
-    if (initializationAttempts >= 3) {
-      console.error('❌ Maximum initialization attempts reached');
-      setMonacoLoadError('Failed to initialize editor after multiple attempts');
-      return;
-    }
-
-    editorInitRef.current = true;
-    console.log(`🔄 Initializing Monaco Editor (attempt ${initializationAttempts + 1})`);
-
-    const initializeEditor = async () => {
-      try {
-        // Clear any existing state
-        setEditor(null);
-        setEditorModel(null);
-        setEditorReady(false);
-
-        // Small delay to ensure DOM is ready
-        await new Promise(resolve => setTimeout(resolve, 50));
-
-        if (!editorRef.current) {
-          throw new Error('Editor container not available');
-        }
-
-        const initialValue = (code && code.length > 0 ? code : '') || latestCode?.code || getDefaultCode(currentLanguage);
-        const initialLanguage = getMonacoLanguage(currentLanguage);
-
-        console.log('🔄 Creating Monaco Editor with:', { initialLanguage, hasInitialValue: !!initialValue });
-
-        // FIXED: Create editor with additional error suppression
-        const monacoEditor = window.monaco.editor.create(editorRef.current, {
-          value: initialValue,
-          language: initialLanguage,
-          ...MONACO_EDITOR_CONFIG,
-          // FIXED: Additional options to prevent NLS-related issues
-          automaticLayout: true,
-          theme: 'vs-dark',
-          // Suppress some potential error sources
-          'semanticHighlighting.enabled': false,
-          'suggest.showStatusBar': false,
-        });
-
-        // Wait a bit for editor to fully initialize
-        await new Promise(resolve => setTimeout(resolve, 100));
-
-        // Validate the editor was created successfully
-        if (!monacoEditor) {
-          throw new Error('Monaco Editor creation returned null');
-        }
-
-        // Get and validate the model
-        const model = monacoEditor.getModel();
-        if (!model) {
-          throw new Error('Monaco Editor model is null after creation');
-        }
-
-        console.log('✅ Monaco Editor and model created successfully');
-
-        // Ensure local code state matches what the editor shows initially
-        try {
-          if (!code || code.trim().length === 0) {
-            setCode(initialValue || '');
-          }
-        } catch {}
-
-        // Set up event handlers
-        const disposable = monacoEditor.onDidChangeModelContent(() => {
-          try {
-            const value = monacoEditor.getValue();
-            setCode(value);
-          } catch (error) {
-            console.warn('⚠️ Error getting editor value:', error);
-          }
-        });
-
-        // Set up resize observer
-        const resizeObserver = new ResizeObserver(() => {
-          try {
-            if (monacoEditor && !monacoEditor.isDisposed?.()) {
-              monacoEditor.layout();
-            }
-          } catch (error) {
-            console.warn('⚠️ Layout error (likely disposed editor):', error);
-          }
-        });
-        resizeObserver.observe(editorRef.current);
-
-        // Update state
-        setEditor(monacoEditor);
-        setEditorModel(model);
-        setEditorReady(true);
-        setInitializationAttempts(0); // Reset attempts on success
-
-        console.log('✅ Monaco Editor fully initialized and ready');
-
-        // Cleanup function
-        return () => {
-          console.log('🧹 Cleaning up Monaco Editor');
-          setEditorReady(false);
-          setEditorModel(null);
-          editorInitRef.current = false;
-          disposable?.dispose();
-          resizeObserver?.disconnect();
-          if (monacoEditor && !monacoEditor.isDisposed?.()) {
-            monacoEditor.dispose();
-          }
-          setEditor(null);
-        };
-
-      } catch (error) {
-        console.error('❌ Failed to initialize Monaco Editor:', error);
-        
-        // Increment attempts and retry if not at max
-        const newAttempts = initializationAttempts + 1;
-        setInitializationAttempts(newAttempts);
-        editorInitRef.current = false;
-
-        if (newAttempts < 3) {
-          console.log('🔄 Retrying Monaco Editor initialization...');
-          // Retry after a delay
-          setTimeout(() => {
-            if (!editorInitRef.current) {
-              setInitializationAttempts(newAttempts);
-            }
-          }, 1000);
-        } else {
-          const errorMessage = error instanceof Error ? error.message : 'Initialization failed';
-          setMonacoLoadError(`Initialization failed: ${errorMessage}`);
-          toast.error('Failed to initialize code editor');
-        }
-      }
-    };
-
-    const cleanup = initializeEditor();
-    return () => {
-      cleanup?.then(cleanupFn => cleanupFn?.());
-    };
-  }, [isMonacoLoaded, initializationAttempts]);
-
-  // Recreate editor when switching tabs back to Editor
-  useEffect(() => {
-    if (!isMonacoLoaded || !editorRef.current) return;
-    // If editor is not ready but container exists, try initializing once more
-    if (!editorReady && !editor && !editorInitRef.current) {
-      // Trigger another init pass
-      setInitializationAttempts((n) => n + 1);
-    } else if (editor && editorReady) {
-      try {
-        editor.layout();
-      } catch {}
-    }
-  }, [editorReady, editor, isMonacoLoaded]);
-
-  // Update editor when latest code is loaded
-  useEffect(() => {
-    if (latestCode && editor && editorReady && !code && !isLoadingCode) {
-      try {
-        editor.setValue(latestCode.code);
-        setCurrentLanguage(latestCode.language);
-        setCode(latestCode.code);
-        console.log('✅ Latest code loaded into editor');
-      } catch (error) {
-        console.error('❌ Failed to load code into editor:', error);
-      }
-    }
-  }, [latestCode, editor, editorReady, isLoadingCode]);
-
-  // Safe language update function
-  const updateEditorLanguage = useCallback((newLanguage: string): boolean => {
-    console.log('🔄 Attempting to update editor language to:', newLanguage);
-
-    // Validate inputs
-    if (!newLanguage || typeof newLanguage !== 'string') {
-      console.error('❌ Invalid language provided');
-      return false;
-    }
-
-    // Check if editor is ready
-    if (!editorReady || !editor) {
-      console.log('🔄 Editor not ready for language update');
-      return false;
-    }
-
-    // Check Monaco availability
-    if (!window.monaco || !window.monaco.editor) {
-      console.error('❌ Monaco Editor not available');
-      return false;
-    }
-
-    try {
-      // Get a fresh model reference
-      const model = getValidModel();
-      if (!model) {
-        console.error('❌ Cannot get valid editor model for language update');
-        return false;
-      }
-
-      const monacoLanguage = getMonacoLanguage(newLanguage);
-      
-      // Get current language safely
-      let currentModelLanguage: string;
-      try {
-        if (typeof model.getLanguageId === 'function') {
-          currentModelLanguage = model.getLanguageId();
-        } else if (typeof model.getModeId === 'function') {
-          currentModelLanguage = model.getModeId();
-        } else {
-          currentModelLanguage = 'unknown';
-        }
-      } catch (error) {
-        console.warn('⚠️ Could not get current model language:', error);
-        currentModelLanguage = 'unknown';
-      }
-      
-      // Only update if language actually changed
-      if (currentModelLanguage === monacoLanguage) {
-        console.log('🔄 Language already set to:', monacoLanguage);
-        return true;
-      }
-
-      // Check if setModelLanguage is available
-      if (typeof window.monaco.editor.setModelLanguage !== 'function') {
-        console.error('❌ setModelLanguage method not available');
-        return false;
-      }
-
-      // Attempt to set the language
-      window.monaco.editor.setModelLanguage(model, monacoLanguage);
-      
-      // Verify the change was successful
-      const updatedLanguage = model.getLanguageId?.() || model.getModeId?.();
-      if (updatedLanguage === monacoLanguage) {
-        console.log('✅ Editor language successfully updated to:', newLanguage);
-        // Update our model reference
-        setEditorModel(model);
-        return true;
-      } else {
-        console.warn('⚠️ Language update may not have been successful');
-        return false;
-      }
-
-    } catch (error) {
-      console.error('❌ Failed to update editor language:', error);
-      
-      // Try fallback: recreate the model
-      try {
-        console.log('🔄 Attempting fallback: model recreation');
-        
-        if (!editor || !isEditorValid()) {
-          throw new Error('Editor not valid for fallback');
-        }
-
-        const currentValue = editor.getValue();
-        const monacoLanguage = getMonacoLanguage(newLanguage);
-        
-        if (window.monaco.editor.createModel && typeof window.monaco.editor.createModel === 'function') {
-          const newModel = window.monaco.editor.createModel(currentValue, monacoLanguage);
-          editor.setModel(newModel);
-          setEditorModel(newModel);
-          console.log('✅ Editor language updated via model recreation:', newLanguage);
-          return true;
-        }
-      } catch (fallbackError) {
-        console.error('❌ Fallback language update also failed:', fallbackError);
-      }
-      
-      return false;
-    }
-  }, [editor, editorReady, getValidModel, isEditorValid]);
-
-  // Language change effect
-  useEffect(() => {
-    if (currentLanguage && editorReady && editor) {
-      const success = updateEditorLanguage(currentLanguage);
-      if (!success) {
-        console.warn('⚠️ Language update failed, but continuing...');
-      }
-    }
-  }, [currentLanguage, editorReady, editor, updateEditorLanguage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latestCode, isLoadingCode]);
 
   // Save code mutation
   const saveCodeMutation = useMutation({
@@ -645,32 +183,41 @@ export function IDE({
     },
   });
 
+  // Validate code mutation
+  const validateCodeMutation = useMutation({
+    mutationFn: async () => {
+      return codeService.validateCode(currentLanguage, code);
+    },
+    onSuccess: (result) => {
+      const nextMarkers = (result.errors || []).map(err => ({
+        message: err.message,
+        severity: err.severity === 'error' ? 8 : 4,
+        startLineNumber: err.line,
+        startColumn: err.column,
+      }));
+      setMarkers(nextMarkers);
+      setActiveTab('problems');
+      if (nextMarkers.length === 0) toast.success('No problems found');
+      else toast.message(`Found ${nextMarkers.length} problem(s)`);
+    },
+    onError: (error) => {
+      toast.error('Validation failed');
+      console.error('❌ Validation error:', error);
+    }
+  });
+
   // Event handlers
   const handleSave = useCallback(() => {
-    let effectiveCode = code;
-    try {
-      if ((!effectiveCode || !effectiveCode.trim()) && editor && typeof editor.getValue === 'function') {
-        effectiveCode = editor.getValue();
-        setCode(effectiveCode);
-      }
-    } catch {}
-
+    const effectiveCode = code;
     if (!effectiveCode?.trim()) {
       toast.error('Cannot save empty code');
       return;
     }
     saveCodeMutation.mutate({ code: effectiveCode, language: currentLanguage });
-  }, [code, editor, currentLanguage, saveCodeMutation]);
+  }, [code, currentLanguage, saveCodeMutation]);
 
   const handleRun = useCallback(() => {
-    let effectiveCode = code;
-    try {
-      if ((!effectiveCode || !effectiveCode.trim()) && editor && typeof editor.getValue === 'function') {
-        effectiveCode = editor.getValue();
-        setCode(effectiveCode);
-      }
-    } catch {}
-
+    const effectiveCode = code;
     if (!effectiveCode?.trim()) {
       toast.error('Cannot execute empty code');
       return;
@@ -681,10 +228,26 @@ export function IDE({
       milestoneId,
       language: currentLanguage,
       code: effectiveCode,
+      input: inputText,
     };
 
+    // If JavaScript, include the whole workspace under the same root
+    if (/^js|javascript$/i.test(currentLanguage)) {
+      const safeFiles = files.map(f => ({ path: normalizePath(f.path), content: f.value }));
+      const safeEntry = normalizePath(entryPath);
+      submission.workspace = { files: safeFiles, entryPath: safeEntry };
+    }
+
     executeCodeMutation.mutate(submission);
-  }, [code, editor, currentLanguage, projectId, milestoneId, executeCodeMutation]);
+  }, [code, currentLanguage, projectId, milestoneId, executeCodeMutation, inputText, files, entryPath]);
+
+  const handleValidate = useCallback(() => {
+    if (!code?.trim()) {
+      toast.error('Cannot validate empty code');
+      return;
+    }
+    validateCodeMutation.mutate();
+  }, [code, validateCodeMutation]);
 
   // Add keyboard shortcuts for IDE actions
   React.useEffect(() => {
@@ -707,26 +270,18 @@ export function IDE({
 
   const handleLanguageChange = useCallback((language: string) => {
     console.log('🔄 Language change requested:', language);
-    
     if (!language || language === currentLanguage) {
       console.log('🔄 Language unchanged or invalid:', language);
       return;
     }
-    
     setCurrentLanguage(language);
-    
-    // If editor exists and ready, set default template for new language if no code
-    if (editor && editorReady && (!code?.trim() || code === getDefaultCode(currentLanguage))) {
-      try {
-        const defaultCode = getDefaultCode(language);
-        editor.setValue(defaultCode);
-        setCode(defaultCode);
-        console.log('✅ Default code set for language:', language);
-      } catch (error) {
-        console.error('❌ Failed to set default code:', error);
-      }
+    // Populate default template when current code is empty or still the previous default
+    if (editorReady && (!code?.trim() || code === getDefaultCode(currentLanguage))) {
+      const defaultCode = getDefaultCode(language);
+      setCode(defaultCode);
+      console.log('✅ Default code set for language:', language);
     }
-  }, [editor, editorReady, code, currentLanguage]);
+  }, [editorReady, code, currentLanguage]);
 
   const handleDownload = useCallback(() => {
     if (code?.trim()) {
@@ -736,12 +291,76 @@ export function IDE({
     }
   }, [code, currentLanguage]);
 
+  // Persist preferences
+  useEffect(() => { try { localStorage.setItem('psyduck-ide-theme', editorTheme); } catch {} }, [editorTheme]);
+  useEffect(() => { try { localStorage.setItem('psyduck-ide-fontSize', String(fontSize)); } catch {} }, [fontSize]);
+  useEffect(() => { try { localStorage.setItem('psyduck-ide-tabSize', String(tabSize)); } catch {} }, [tabSize]);
+  useEffect(() => { try { localStorage.setItem('psyduck-ide-sidebarWidth', String(sidebarWidth)); } catch {} }, [sidebarWidth]);
+
+  // File operations
+  const activeFile = files.find(f => f.id === activeFileId) || files[0];
+  useEffect(() => {
+    if (!activeFile) return;
+    setCurrentLanguage(activeFile.language);
+    setCode(activeFile.value);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeFileId]);
+
+  const addFile = () => {
+    const count = files.length + 1;
+    const ext = currentLanguage === 'typescript' ? 'ts' : 'js';
+    const folder = newFileFolder || ROOT_FOLDER;
+    const path = normalizePath(`${folder}/file${count}.${ext}`);
+    const file: EditorFile = { id: `${Date.now()}`, path, language: currentLanguage, value: getDefaultCode(currentLanguage) };
+    setFiles(prev => [...prev, file]);
+    setActiveFileId(file.id);
+  };
+
+  const addFolder = () => {
+    // Create a simple folder under root with incremental name
+    const count = folders.filter(f => f.startsWith(`${ROOT_FOLDER}/folder`)).length + 1;
+    const folder = normalizePath(`${ROOT_FOLDER}/folder${count}`);
+    if (!folders.includes(folder)) setFolders(prev => [...prev, folder]);
+    setNewFileFolder(folder);
+  };
+
+  const removeFile = (id: string) => {
+    if (files.length === 1) return;
+    const idx = files.findIndex(f => f.id === id);
+    const next = files.filter(f => f.id !== id);
+    setFiles(next);
+    if (activeFileId === id) {
+      const newIdx = Math.max(0, idx - 1);
+      setActiveFileId(next[newIdx].id);
+    }
+  };
+
+  const updateActiveFileValue = (nextCode: string) => {
+    setCode(nextCode);
+    setFiles(prev => prev.map(f => f.id === activeFileId ? { ...f, value: nextCode } : f));
+  };
+
+  // Sidebar resizing handlers
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      const next = Math.min(480, Math.max(160, e.clientX));
+      setSidebarWidth(next);
+    };
+    const onUp = () => setIsResizing(false);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [isResizing]);
+
   // Ensure supportedLanguages is always an array and handle all possible states
   const supportedLanguages: SupportedLanguage[] = React.useMemo(() => {
     if (Array.isArray(supportedLanguagesData) && supportedLanguagesData.length > 0) {
       return supportedLanguagesData;
     }
-    
     // Return default languages if API data is not available
     return [
       { language: 'javascript', version: '18.x', extensions: ['js'], template: '', examples: {} },
@@ -751,55 +370,7 @@ export function IDE({
     ];
   }, [supportedLanguagesData]);
 
-  // Render loading state
-  const renderLoadingState = () => (
-    <div className="h-full flex items-center justify-center">
-      <div className="text-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-psyduck-primary mx-auto mb-4"></div>
-        <p className="text-muted-foreground">
-          {monacoLoadError ? 'Failed to load editor' : 'Loading Monaco Editor...'}
-        </p>
-        {initializationAttempts > 0 && initializationAttempts < 3 && (
-          <p className="text-xs text-muted-foreground mt-1">
-            Initialization attempt {initializationAttempts + 1}/3
-          </p>
-        )}
-        {isLoadingLanguages && (
-          <p className="text-xs text-muted-foreground mt-2">Loading supported languages...</p>
-        )}
-        <div className="flex items-center justify-center gap-3 mt-4">
-          <button 
-            onClick={() => {
-              setInitializationAttempts(0);
-              setMonacoLoadError(null);
-              editorInitRef.current = false;
-            }}
-            className="text-xs underline hover:no-underline"
-          >
-            Retry
-          </button>
-          <button 
-            onClick={() => window.location.reload()} 
-            className="text-xs underline hover:no-underline"
-          >
-            Reload Page
-          </button>
-          <button
-            onClick={() => {
-              if (!code || !code.trim()) {
-                const fallback = getDefaultCode(currentLanguage);
-                setCode(fallback);
-              }
-              setUseBasicEditor(true);
-            }}
-            className="text-xs underline hover:no-underline text-psyduck-primary"
-          >
-            Use basic editor
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+  const filesUnderRoot = files.map(f => ({ ...f, path: normalizePath(f.path) }));
 
   return (
     <div className="h-screen flex flex-col bg-background">
@@ -813,12 +384,84 @@ export function IDE({
         onSave={handleSave}
         onDownload={handleDownload}
         onRun={handleRun}
+        onValidate={handleValidate}
+        isValidating={validateCodeMutation.isPending}
         projectId={projectId}
         milestoneId={milestoneId}
+        minimapEnabled={minimapEnabled}
+        wordWrapEnabled={wordWrapEnabled}
+        onToggleMinimap={setMinimapEnabled}
+        onToggleWordWrap={setWordWrapEnabled}
+        theme={editorTheme}
+        onThemeChange={setEditorTheme}
+        fontSize={fontSize}
+        onFontSizeChange={setFontSize}
+        tabSize={tabSize}
+        onTabSizeChange={setTabSize}
       />
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
+        {/* File Explorer */}
+        <div className="border-r bg-card/40 flex flex-col" style={{ width: sidebarWidth }}>
+          <div className="flex items-center justify-between p-2 border-b">
+            <span className="text-xs font-semibold text-muted-foreground flex items-center gap-1"><Folder className="h-3.5 w-3.5" /> Explorer</span>
+            <div className="flex items-center gap-2">
+              <Select value={newFileFolder} onValueChange={setNewFileFolder}>
+                <SelectTrigger className="w-32">
+                  <SelectValue placeholder="Folder" />
+                </SelectTrigger>
+                <SelectContent>
+                  {folders.map(f => (
+                    <SelectItem key={f} value={f}>{f}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <button className="text-xs underline" onClick={addFolder} title="New folder">
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                <span className="sr-only">New folder</span>
+              </button>
+              <button className="text-xs underline" onClick={addFile} title="New file">
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                <span className="sr-only">New file</span>
+              </button>
+            </div>
+          </div>
+          <ScrollArea className="flex-1">
+            <ul className="p-2 space-y-1">
+              {filesUnderRoot.map(f => (
+                <li key={f.id} className={`flex items-center justify-between px-2 py-1 rounded cursor-pointer ${activeFileId === f.id ? 'bg-accent' : 'hover:bg-muted'}`} onClick={() => setActiveFileId(f.id)}>
+                  <div className="min-w-0">
+                    <div className="text-sm truncate flex items-center gap-1"><FileCode className="h-3.5 w-3.5" /> {basename(f.path)}</div>
+                    <div className="text-[10px] text-muted-foreground truncate">{parentDir(f.path)}</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {normalizePath(entryPath) === normalizePath(f.path) && (
+                      <Badge className="text-[10px] flex items-center gap-1" variant="secondary"><PlayCircle className="h-3 w-3" /> Entry</Badge>
+                    )}
+                    {files.length > 1 && (
+                      <button className="opacity-60 hover:opacity-100" onClick={(e) => { e.stopPropagation(); setEntryPath(f.path); toast.message(`Entry set to ${basename(f.path)}`); }} title="Set as entry">
+                        <span className="text-[10px] underline">Set Entry</span>
+                      </button>
+                    )}
+                    {files.length > 1 && (
+                      <button className="opacity-60 hover:opacity-100" onClick={(e) => { e.stopPropagation(); removeFile(f.id); }} title="Delete file">
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span className="sr-only">Delete file</span>
+                      </button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </ScrollArea>
+          <div
+            className="w-1 cursor-col-resize border-l border-border hover:bg-muted/50"
+            onMouseDown={() => setIsResizing(true)}
+            title="Drag to resize"
+          />
+        </div>
+
         {/* Editor Panel */}
         <div className="flex-1 flex flex-col">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
@@ -826,7 +469,7 @@ export function IDE({
               <TabsTrigger value="editor" className="flex items-center gap-2">
                 <FileText className="h-4 w-4" />
                 Editor
-                {isMonacoLoaded && !editorReady && (
+                {!editorReady && (
                   <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse ml-1" title="Initializing..."></div>
                 )}
                 {editorReady && (
@@ -842,54 +485,108 @@ export function IDE({
                   </Badge>
                 )}
               </TabsTrigger>
+              <TabsTrigger value="problems" className="flex items-center gap-2">
+                <Bug className="h-4 w-4" /> Problems
+                {markers.length > 0 && (
+                  <Badge variant="destructive" className="ml-1">{markers.length}</Badge>
+                )}
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="editor" className="flex-1 m-4 mt-2" forceMount>
               <Card className="h-full">
                 <CardContent className="p-0 h-full">
-                  {isMonacoLoaded && !monacoLoadError && !useBasicEditor ? (
-                    <>
-                      <div ref={editorRef} className="hidden" />
-                      <CodeEditor
-                        value={code}
-                        language={currentLanguage}
-                        className="h-full w-full"
-                        onChange={setCode}
-                        onReady={() => setEditorReady(true)}
-                      />
-                    </>
-                  ) : useBasicEditor ? (
-                    <CodeEditor
-                      value={code}
-                      language={currentLanguage}
-                      className="h-full w-full"
-                      onChange={setCode}
-                    />
-                  ) : (
-                    renderLoadingState()
-                  )}
+                  <CodeEditor
+                    value={code}
+                    language={currentLanguage}
+                    className="h-full w-full"
+                    onChange={updateActiveFileValue}
+                    onReady={() => setEditorReady(true)}
+                    showMinimap={minimapEnabled}
+                    wordWrap={wordWrapEnabled ? 'on' : 'off'}
+                    fontSize={fontSize}
+                    tabSize={tabSize}
+                    theme={editorTheme}
+                    storageKey={`psyduck-ide-${activeFile?.path}`}
+                    autoSave
+                    onStatusChange={setStatus}
+                  />
                 </CardContent>
               </Card>
+              <div className="h-7 text-xs text-muted-foreground px-3 flex items-center justify-between border-t bg-card/60">
+                <span>{basename(activeFile?.path || '')} • {currentLanguage}</span>
+                <span>Ln {status.line}, Col {status.column} • {status.length} chars {status.selectionLength ? `• Sel ${status.selectionLength}` : ''}</span>
+              </div>
             </TabsContent>
 
             <TabsContent value="output" className="flex-1 m-4 mt-2" forceMount>
               <Card className="h-full">
-                <CardContent className="p-4 h-full">
+                <CardContent className="p-4 h-full flex flex-col gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Program input (stdin)</span>
+                  </div>
+                  <textarea
+                    className="w-full h-20 rounded border bg-background p-2 text-sm font-mono"
+                    placeholder="Enter input to pass to your program..."
+                    value={inputText}
+                    onChange={(e) => setInputText(e.target.value)}
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={() => {
+                      try { navigator.clipboard.writeText(executionResult ? (executionResult.success ? (executionResult.output || '') : (executionResult.errorMessage || '')) : ''); toast.success('Output copied'); } catch {}
+                    }} title="Copy output">
+                      <Copy className="h-4 w-4 mr-2" /> Copy Output
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => setExecutionResult(null)} title="Clear output">
+                      <Trash2 className="h-4 w-4 mr-2" /> Clear
+                    </Button>
+                  </div>
+                  <div className="flex-1 min-h-0">
+                    <ScrollArea className="h-full">
+                      <pre className="text-sm whitespace-pre-wrap">{executionResult ? (executionResult.success ? (executionResult.output || '') : (executionResult.errorMessage || '')) : 'No output yet.'}</pre>
+                    </ScrollArea>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="problems" className="flex-1 m-4 mt-2" forceMount>
+              <Card className="h-full">
+                <CardContent className="p-0 h-full">
                   <ScrollArea className="h-full">
-                    <ExecutionResultPanel result={executionResult} />
+                    {markers.length === 0 ? (
+                      <div className="p-4 text-sm text-muted-foreground">No problems detected.</div>
+                    ) : (
+                      <table className="w-full text-sm">
+                        <thead className="text-left sticky top-0 bg-card border-b">
+                          <tr>
+                            <th className="py-2 px-3">Severity</th>
+                            <th className="py-2 px-3">Message</th>
+                            <th className="py-2 px-3">Line</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {markers.map((m, idx) => (
+                            <tr key={idx} className="border-b hover:bg-muted/40">
+                              <td className="py-2 px-3">
+                                <span className="inline-flex items-center gap-1">
+                                  {m.severity === 8 ? <AlertTriangle className="h-3.5 w-3.5 text-red-500" /> : <AlertTriangle className="h-3.5 w-3.5 text-yellow-500" />}
+                                  {m.severity === 8 ? 'Error' : 'Warn'}
+                                </span>
+                              </td>
+                              <td className="py-2 px-3">{m.message}</td>
+                              <td className="py-2 px-3">{m.startLineNumber}:{m.startColumn}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
                   </ScrollArea>
                 </CardContent>
               </Card>
             </TabsContent>
           </Tabs>
         </div>
-
-        {/* Side Panel */}
-        <SidePanel
-          projectId={projectId}
-          milestoneId={milestoneId}
-          currentLanguage={currentLanguage}
-        />
       </div>
     </div>
   );

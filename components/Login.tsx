@@ -36,9 +36,10 @@ export function Login() {
     setIsLoading(true);
 
     try {
-      await login(credentials.email, credentials.password);
-      // Navigation will be handled by the auth context
-      navigate('/dashboard');
+      const ok = await login(credentials.email, credentials.password);
+      if (ok) {
+        navigate('/dashboard');
+      }
     } catch (error) {
       // Error handling is done in the auth context
       console.error('Login failed:', error);
@@ -62,8 +63,10 @@ export function Login() {
       setIsLoading(true);
       try {
         console.log('🎮 Attempting demo login...');
-        await login(demoCredentials.email, demoCredentials.password);
-        navigate('/dashboard');
+        const ok = await login(demoCredentials.email, demoCredentials.password);
+        if (ok) {
+          navigate('/dashboard');
+        }
       } catch (error) {
         console.error('Demo login failed:', error);
       } finally {

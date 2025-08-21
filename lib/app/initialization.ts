@@ -1,6 +1,5 @@
 import { useEffect } from 'react';
 import { performanceUtils } from '../performance/appUtils';
-import { setupMonacoEnvironment } from './monaco';
 
 // App initialization hook with performance optimization
 export const useAppInitialization = (APP_CONFIG: any, config: any, isDevelopment: boolean) => {
@@ -13,8 +12,7 @@ export const useAppInitialization = (APP_CONFIG: any, config: any, isDevelopment
       console.log('🚀 Mode:', config.app?.environment || 'development');
     }
 
-    // Setup Monaco Environment
-    const cleanupMonaco = setupMonacoEnvironment();
+    // Monaco removed; no global editor setup needed
 
     // Initialize performance monitoring
     if (process.env.NODE_ENV === 'development') {
@@ -26,6 +24,6 @@ export const useAppInitialization = (APP_CONFIG: any, config: any, isDevelopment
     performanceUtils.mark('app-initialization-end');
     performanceUtils.measure('app-initialization', 'app-initialization-start', 'app-initialization-end');
 
-    return cleanupMonaco;
+    return () => {};
   }, [APP_CONFIG.NAME, APP_CONFIG.VERSION, config.app?.environment, config.app?.version, isDevelopment]);
 };

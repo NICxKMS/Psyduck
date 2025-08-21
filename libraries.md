@@ -74,13 +74,12 @@ Complete component library based on Radix UI primitives for accessibility and fu
 ## 💻 Code Editor & IDE
 
 ### Monaco Editor
-- **@monaco-editor/react** - React integration for Monaco Editor
-- **monaco-editor** - VS Code's editor for web applications
+- **CodeMirror 6** - Modular code editor with language packages
 
 ```json
 {
-  "@monaco-editor/react": "^4.6.0",
-  "monaco-editor": "^0.45.0"
+  "@codemirror/state": "^6.x",
+  "@codemirror/view": "^6.x"
 }
 ```
 

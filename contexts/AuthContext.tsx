@@ -52,6 +52,8 @@ interface AuthContextType {
   updateUser: (updates: Partial<User>) => void;
   updateProfile: (updates: Partial<User>) => Promise<boolean>;
   upgradeToPremium: () => Promise<boolean>;
+  error: string | null;
+  clearError: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -110,6 +112,7 @@ interface AuthProviderProps {
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   // Initialize auth state and API service
   useEffect(() => {
@@ -171,14 +174,18 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         } else {
           toast.success('Login successful!');
         }
+        setAuthError(null);
         
         return true;
       } else {
-        toast.error(response.message || 'Login failed');
+        const message = response.message || 'Login failed';
+        setAuthError(message);
+        toast.error(message);
         return false;
       }
     } catch (error) {
       console.error('Login error:', error);
+      setAuthError('Login failed. Please try again.');
       toast.error('Login failed. Please try again.');
       return false;
     } finally {
@@ -200,13 +207,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         localStorage.setItem('psyduck_token', token);
         
         toast.success('Registration successful! Welcome to Psyduck!');
+        setAuthError(null);
         return true;
       } else {
-        toast.error(response.message || 'Registration failed');
+        const message = response.message || 'Registration failed';
+        setAuthError(message);
+        toast.error(message);
         return false;
       }
     } catch (error) {
       console.error('Registration error:', error);
+      setAuthError('Registration failed. Please try again.');
       toast.error('Registration failed. Please try again.');
       return false;
     } finally {
@@ -221,6 +232,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     
     // Clear API service auth
     apiService.setAuth(null, null);
+    setAuthError(null);
     
     // Call API logout (fire and forget)
     apiService.logout().catch(error => {
@@ -296,7 +308,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     register,
     updateUser,
     updateProfile,
-    upgradeToPremium
+    upgradeToPremium,
+    error: authError,
+    clearError: () => setAuthError(null)
   };
 
   return (

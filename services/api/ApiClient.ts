@@ -253,8 +253,35 @@ export class ApiClient {
         // Code execution
         case 'POST /code/execute':
           return this.executeCodeMock(data.code, data.language, data.input);
+        // IDE bootstrap support
+        case 'GET /code/languages':
+          return {
+            data: [
+              { language: 'javascript', version: '18.x', extensions: ['js'], template: "console.log('Hello, World!')\n", examples: {} },
+              { language: 'python', version: '3.11', extensions: ['py'], template: "print('Hello, World!')\n", examples: {} },
+              { language: 'java', version: '17', extensions: ['java'], template: 'public class Main {\n  public static void main(String[] args) {\n    System.out.println("Hello, World!");\n  }\n}\n', examples: {} },
+              { language: 'cpp', version: 'C++17', extensions: ['cpp'], template: '#include <iostream>\nint main(){ std::cout << "Hello, World!"; }\n', examples: {} },
+            ] as any,
+            success: true,
+            message: 'ok'
+          } as ApiResponse<T>;
 
         default:
+          // Handle dynamic latest route patterns for mock
+          if (method === 'GET' && endpoint.startsWith('/code/latest/')) {
+            const parts = endpoint.split('/');
+            const projectId = parts[3] || 'demo-project';
+            const milestoneId = parts[4] || 'default';
+            return {
+              data: {
+                code: `// Project: ${projectId}\n// Milestone: ${milestoneId}\nconsole.log('Hello, World!');\n`,
+                language: 'javascript',
+                lastModified: new Date().toISOString()
+              } as any,
+              success: true,
+              message: 'ok'
+            } as ApiResponse<T>;
+          }
           console.warn(`Mock API: Unhandled ${method} ${endpoint}`);
           return {
             data: null,

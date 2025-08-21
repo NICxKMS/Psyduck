@@ -31,9 +31,6 @@ interface Config {
     maxFileSize: number;
     allowedTypes: string[];
   };
-  monaco: {
-    cdnUrl: string;
-  };
 }
 
 // Default configuration
@@ -61,10 +58,6 @@ const defaultConfig: Config = {
   upload: {
     maxFileSize: 5 * 1024 * 1024, // 5MB
     allowedTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
-  },
-  monaco: {
-    // FIXED: Use a more reliable CDN with better NLS support
-    cdnUrl: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs',
   },
 };
 
@@ -135,10 +128,6 @@ function loadConfig(): Config {
       maxFileSize: parseInt(getEnvVar('VITE_MAX_FILE_SIZE', '5242880')),
       allowedTypes: getEnvVar('VITE_ALLOWED_FILE_TYPES', defaultConfig.upload.allowedTypes.join(',')).split(','),
     },
-    monaco: {
-      // FIXED: Allow environment override but keep the reliable default
-      cdnUrl: getEnvVar('VITE_MONACO_CDN', defaultConfig.monaco.cdnUrl),
-    },
   };
 }
 
@@ -170,12 +159,7 @@ export function validateConfig(): void {
     }
   }
 
-  // FIXED: Validate Monaco CDN configuration
-  if (!config.monaco.cdnUrl) {
-    warnings.push('Monaco Editor CDN URL not configured, using default');
-  } else {
-    console.info('🎨 Monaco Editor CDN:', config.monaco.cdnUrl);
-  }
+  // Monaco removed: no CDN validation needed
 
   if (warnings.length > 0) {
     console.warn(`Configuration warnings:\n${warnings.join('\n')}`);

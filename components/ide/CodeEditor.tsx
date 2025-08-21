@@ -1,109 +1,323 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { EditorState, Compartment } from '@codemirror/state';
+import { EditorView, keymap, drawSelection, highlightActiveLine, highlightActiveLineGutter, lineNumbers } from '@codemirror/view';
+import { defaultHighlightStyle, indentOnInput, syntaxHighlighting, bracketMatching } from '@codemirror/language';
+import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete';
+import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
+import { history, defaultKeymap, historyKeymap } from '@codemirror/commands';
+import { lintKeymap } from '@codemirror/lint';
+import { javascript } from '@codemirror/lang-javascript';
+import { python } from '@codemirror/lang-python';
+import { java } from '@codemirror/lang-java';
+import { cpp } from '@codemirror/lang-cpp';
+import { html } from '@codemirror/lang-html';
+import { css } from '@codemirror/lang-css';
+import { sql } from '@codemirror/lang-sql';
+import { rust } from '@codemirror/lang-rust';
+import { go } from '@codemirror/lang-go';
 
 export interface CodeEditorProps {
 	value: string;
 	language: string;
 	className?: string;
 	placeholder?: string;
+	// Feature toggles
+	readOnly?: boolean;
+	showMinimap?: boolean;
+	wordWrap?: 'off' | 'on' | 'bounded' | 'wordWrapColumn';
+	fontSize?: number;
+	lineNumbers?: 'on' | 'off' | 'relative' | 'interval';
+	tabSize?: number;
+	intellisense?: boolean;
+	// Appearance
+	theme?: 'light' | 'dark' | 'system';
+	// Persistence
+	storageKey?: string;
+	autoSave?: boolean;
+	// Events/APIs
+	registerApi?: (api: {
+		format: () => void;
+		setTheme: (theme: string) => void;
+		getValue: () => string;
+		setValue: (next: string) => void;
+		focus: () => void;
+	}) => void;
+	onStatusChange?: (status: { line: number; column: number; length: number; selectionLength: number }) => void;
 	onChange: (code: string) => void;
 	onReady?: () => void;
 }
 
-/**
- * CodeEditor: Robust editor with Monaco first, textarea fallback.
- * - Avoids inline styles for linter compliance
- * - Cleans up listeners/workers safely
- */
+const mapLanguageToExtension = (lang: string) => {
+	const lower = (lang || '').toLowerCase();
+	switch (lower) {
+		case 'javascript':
+			return javascript({ jsx: true, typescript: false });
+		case 'typescript':
+			return javascript({ jsx: true, typescript: true });
+		case 'python':
+			return python();
+		case 'java':
+			return java();
+		case 'cpp':
+			return cpp();
+		case 'c':
+			return cpp();
+		case 'html':
+			return html();
+		case 'css':
+			return css();
+		case 'sql':
+			return sql();
+		case 'rust':
+			return rust();
+		case 'go':
+			return go();
+		default:
+			return javascript({ jsx: true });
+	}
+};
+
 export const CodeEditor: React.FC<CodeEditorProps> = ({
 	value,
 	language,
 	className,
 	placeholder = 'Start typing your code here...',
+	readOnly = false,
+	showMinimap = true,
+	wordWrap = 'on',
+	fontSize = 14,
+	lineNumbers: showLineNumbers = 'on',
+	tabSize = 2,
+	intellisense = true,
+	// Appearance
+	theme = 'system',
+	// Persistence
+	storageKey,
+	autoSave = true,
+	// Events/APIs
+	registerApi,
+	onStatusChange,
 	onChange,
 	onReady,
 }) => {
 	const containerRef = useRef<HTMLDivElement>(null);
-	const editorRef = useRef<any>(null);
-	const onChangeRef = useRef(onChange);
-	const [useFallback, setUseFallback] = useState(false);
+	const viewRef = useRef<EditorView | null>(null);
+	const languageCompartment = useRef(new Compartment()).current;
+	const editableCompartment = useRef(new Compartment()).current;
+	const tabSizeCompartment = useRef(new Compartment()).current;
+	const wrapCompartment = useRef(new Compartment()).current;
+	const fontSizeCompartment = useRef(new Compartment()).current;
+	const themeCompartment = useRef(new Compartment()).current;
 	const [isReady, setIsReady] = useState(false);
 
-	const destroyEditor = useCallback(() => {
-		try {
-			if (editorRef.current && typeof editorRef.current.dispose === 'function') {
-				editorRef.current.dispose();
-				editorRef.current = null;
-			}
-		} catch {}
-	}, []);
-
-	// Keep latest onChange without re-initializing editor
+	// Initialize editor
 	useEffect(() => {
-		onChangeRef.current = onChange;
-	}, [onChange]);
-
-	useEffect(() => {
-		if (useFallback) return;
 		if (!containerRef.current) return;
+		if (viewRef.current) return;
 
-		// Guard: monaco not available → fallback
-		if (!window.monaco || !window.monaco.editor) {
-			setUseFallback(true);
-			return;
-		}
+		const languageExt = mapLanguageToExtension(language);
+		const wrapExt = wordWrap === 'off' ? [] : [EditorView.lineWrapping];
+		const lineNumbersExt = showLineNumbers === 'off' ? [] : [lineNumbers(), highlightActiveLineGutter()];
 
-		try {
-			const editor = window.monaco.editor.create(containerRef.current, {
-				value,
-				language,
-				automaticLayout: true,
-				theme: 'vs-dark',
-			});
-			editorRef.current = editor;
+		const state = EditorState.create({
+			doc: value ?? '',
+			extensions: [
+				keymap.of([
+					...closeBracketsKeymap,
+					...defaultKeymap,
+					...searchKeymap,
+					...historyKeymap,
+					...completionKeymap,
+					...lintKeymap,
+				]),
+				languageCompartment.of(languageExt),
+				editableCompartment.of(EditorView.editable.of(!readOnly)),
+				lineNumbersExt,
+				drawSelection(),
+				highlightActiveLine(),
+				indentOnInput(),
+				bracketMatching(),
+				highlightSelectionMatches(),
+				closeBrackets(),
+				intellisense ? autocompletion() : [],
+				fontSizeCompartment.of(EditorView.theme({
+					'&': { fontSize: `${fontSize}px` },
+					'.cm-scroller': { fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace" },
+				})),
+				themeCompartment.of(EditorView.theme({
+					'&': { backgroundColor: 'transparent', color: 'inherit' },
+					'.cm-content': { caretColor: 'inherit' },
+					'.cm-activeLine': { backgroundColor: 'var(--tw-colors-muted, rgba(0,0,0,0.04))' },
+					'.cm-gutters': { backgroundColor: 'transparent', color: 'inherit', borderRight: '1px solid var(--tw-colors-border, rgba(0,0,0,0.08))' },
+				})),
+				syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+				wrapCompartment.of(wrapExt),
+				tabSizeCompartment.of(EditorState.tabSize.of(tabSize)),
+				history(),
+			],
+		});
 
-			const changeDisposable = editor.onDidChangeModelContent(() => {
-				try {
-					const v = editor.getValue();
-					onChangeRef.current(v);
-				} catch {}
-			});
+		const view = new EditorView({
+			state,
+			parent: containerRef.current,
+			dispatch: (tr) => {
+				view.update([tr]);
+				if (tr.docChanged) {
+					const newDoc = tr.state.doc.toString();
+					onChange(newDoc);
+					if (autoSave && storageKey) {
+						try { localStorage.setItem(storageKey, newDoc); } catch {}
+					}
+				}
+				if (onStatusChange && (tr.selection || tr.docChanged)) {
+					const sel = tr.state.selection.main;
+					const pos = sel.head;
+					const doc = tr.state.doc;
+					const line = doc.lineAt(pos);
+					onStatusChange({
+						line: line.number,
+						column: pos - line.from + 1,
+						length: doc.length,
+						selectionLength: Math.abs(sel.to - sel.from),
+					});
+				}
+			},
+		});
 
+		viewRef.current = view;
 			setIsReady(true);
 			onReady?.();
 
 			return () => {
-				try { changeDisposable?.dispose?.(); } catch {}
-				destroyEditor();
-			};
-		} catch (e) {
-			setUseFallback(true);
-		}
-	}, [useFallback, language, onReady, destroyEditor]);
+			try { view.destroy(); } catch {}
+			viewRef.current = null;
+		};
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, []);
 
-	// Keep Monaco value in sync when parent value changes externally
+	// React to external prop changes
 	useEffect(() => {
+		const view = viewRef.current;
+		if (!view) return;
+		const current = view.state.doc.toString();
+		if (current !== value) {
+			view.dispatch({ changes: { from: 0, to: current.length, insert: value } });
+		}
+	}, [value]);
+
+	useEffect(() => {
+		const view = viewRef.current;
+		if (!view) return;
+		view.dispatch({ effects: languageCompartment.reconfigure(mapLanguageToExtension(language)) });
+	}, [language]);
+
+	useEffect(() => {
+		const view = viewRef.current;
+		if (!view) return;
+		view.dispatch({ effects: editableCompartment.reconfigure(EditorView.editable.of(!readOnly)) });
+	}, [readOnly]);
+
+	useEffect(() => {
+		if (!autoSave || !storageKey) return;
+		try { localStorage.setItem(storageKey, value); } catch {}
+	}, [autoSave, storageKey, value]);
+
+	useEffect(() => {
+		if (!storageKey) return;
 		try {
-			if (!useFallback && isReady && editorRef.current) {
-				const current = editorRef.current.getValue?.();
-				if (typeof current === 'string' && current !== value) {
-					editorRef.current.setValue(value);
-				}
+			const saved = localStorage.getItem(storageKey);
+			if (saved && typeof saved === 'string' && saved !== value) {
+				onChange(saved);
 			}
 		} catch {}
-	}, [value, isReady, useFallback]);
+		// run once
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, []);
+
+	useEffect(() => {
+		const view = viewRef.current;
+		if (!view) return;
+		view.dispatch({ effects: wrapCompartment.reconfigure(wordWrap === 'off' ? [] : [EditorView.lineWrapping]) });
+	}, [wordWrap]);
+
+	useEffect(() => {
+		const view = viewRef.current;
+		if (!view) return;
+		view.dispatch({ effects: tabSizeCompartment.reconfigure(EditorState.tabSize.of(tabSize)) });
+	}, [tabSize]);
+
+	useEffect(() => {
+		const view = viewRef.current;
+		if (!view) return;
+		view.dispatch({ effects: fontSizeCompartment.reconfigure(EditorView.theme({ '&': { fontSize: `${fontSize}px` } })) });
+	}, [fontSize]);
+
+	// Theme handling
+	useEffect(() => {
+		const view = viewRef.current;
+		if (!view) return;
+		const isDark = (() => {
+			if (theme === 'dark') return true;
+			if (theme === 'light') return false;
+			try { return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches; } catch { return false; }
+		})();
+		const themed = EditorView.theme(
+			isDark
+				? {
+					'&': { backgroundColor: 'transparent', color: 'rgb(226 232 240)' },
+					'.cm-content': { caretColor: 'rgb(226 232 240)' },
+					'.cm-activeLine': { backgroundColor: 'rgba(148, 163, 184, 0.12)' },
+					'.cm-selectionLayer .cm-selectionBackground': { backgroundColor: 'rgba(59, 130, 246, 0.35)' },
+					'.cm-gutters': { backgroundColor: 'transparent', color: 'rgb(148 163 184)', borderRight: '1px solid rgba(148,163,184,0.25)' },
+				}
+				: {
+					'&': { backgroundColor: 'transparent', color: 'rgb(15 23 42)' },
+					'.cm-content': { caretColor: 'rgb(15 23 42)' },
+					'.cm-activeLine': { backgroundColor: 'rgba(15, 23, 42, 0.06)' },
+					'.cm-selectionLayer .cm-selectionBackground': { backgroundColor: 'rgba(59, 130, 246, 0.28)' },
+					'.cm-gutters': { backgroundColor: 'transparent', color: 'rgb(71 85 105)', borderRight: '1px solid rgba(15,23,42,0.12)' },
+				}
+		);
+		view.dispatch({ effects: themeCompartment.reconfigure(themed) });
+	}, [theme]);
+
+	// Register public API for parent components
+	useEffect(() => {
+		if (!registerApi) return;
+		registerApi({
+			format: () => {
+				// placeholder: could integrate Prettier in the future
+			},
+			setTheme: (_theme: string) => {
+				// theming handled via Tailwind + EditorView.theme if needed
+			},
+			getValue: () => {
+				try { return String(viewRef.current?.state.doc.toString() ?? ''); } catch { return ''; }
+			},
+			setValue: (next: string) => {
+				const view = viewRef.current;
+				if (!view) return;
+				const current = view.state.doc.toString();
+				view.dispatch({ changes: { from: 0, to: current.length, insert: next } });
+			},
+			focus: () => {
+				try { viewRef.current?.focus(); } catch {}
+			},
+		});
+	}, [registerApi]);
 
 	return (
 		<div className={className}>
-			{useFallback ? (
+			<div ref={containerRef} className="h-full w-full">
+				{!isReady && (
 				<textarea
 					className="h-full w-full p-3 font-mono text-sm bg-background text-foreground outline-none resize-none"
 					value={value}
 					placeholder={placeholder}
-					onChange={(e) => onChange(e.target.value)}
+						readOnly
 				/>
-			) : (
-				<div ref={containerRef} className="h-full w-full" />
 			)}
+			</div>
 		</div>
 	);
 };

@@ -431,62 +431,39 @@ const VirtualizedProjectList = ({ projects }: { projects: Project[] }) => {
 };
 ```
 
-## 🎮 Monaco Editor Integration
+## 🎮 CodeMirror 6 Integration
 
 ### Editor Configuration
 ```typescript
-// Monaco Editor setup with proper configuration
-import * as monaco from 'monaco-editor';
+// CodeMirror 6 basic setup example
+import { useEffect, useRef } from 'react';
+import { EditorState } from '@codemirror/state';
+import { EditorView, keymap } from '@codemirror/view';
+import { defaultKeymap } from '@codemirror/commands';
+import { javascript } from '@codemirror/lang-javascript';
 
-// Configure Monaco Environment to prevent worker loading errors
-window.MonacoEnvironment = {
-  getWorkerUrl: function (workerId: string, label: string) {
-    return `data:text/javascript;charset=utf-8,${encodeURIComponent(`
-      self.addEventListener('message', function(e) {
-        self.postMessage(e.data);
-      });
-    `)}`;
-  }
-};
-
-// Editor component
-export const CodeEditor: React.FC<CodeEditorProps> = ({
-  language,
-  value,
-  onChange,
-  theme = 'vs-dark'
-}) => {
-  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+export const CodeEditor: React.FC<{ value: string; onChange: (v: string) => void }> = ({ value, onChange }) => {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const viewRef = useRef<EditorView | null>(null);
 
   useEffect(() => {
-    if (editorRef.current) {
-      const model = editorRef.current.getModel();
-      if (model) {
-        monaco.editor.setModelLanguage(model, language);
+    if (!ref.current || viewRef.current) return;
+    const state = EditorState.create({
+      doc: value,
+      extensions: [keymap.of(defaultKeymap), javascript({ jsx: true })]
+    });
+    viewRef.current = new EditorView({
+      state,
+      parent: ref.current,
+      dispatch: tr => {
+        viewRef.current!.update([tr]);
+        if (tr.docChanged) onChange(tr.state.doc.toString());
       }
-    }
-  }, [language]);
+    });
+    return () => { try { viewRef.current?.destroy(); } catch {} viewRef.current = null; };
+  }, [value, onChange]);
 
-  return (
-    <Editor
-      height="400px"
-      language={language}
-      value={value}
-      onChange={onChange}
-      theme={theme}
-      onMount={(editor) => {
-        editorRef.current = editor;
-      }}
-      options={{
-        minimap: { enabled: false },
-        fontSize: 14,
-        lineNumbers: 'on',
-        automaticLayout: true,
-        scrollBeyondLastLine: false,
-        wordWrap: 'on'
-      }}
-    />
-  );
+  return <div ref={ref} />;
 };
 ```
 
