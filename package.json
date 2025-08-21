@@ -26,7 +26,7 @@
     "postinstall": "npm --prefix backend install",
     "deploy:frontend": "npm run build",
     "deploy:backend": "cross-env NODE_ENV=production node backend/server.js",
-    "deploy:pages": "npm run build && wrangler pages deploy dist"
+    "deploy:pages": "npm run build && wrangler pages deploy"
   },
   "dependencies": {
     "@codemirror/autocomplete": "6.18.6",
