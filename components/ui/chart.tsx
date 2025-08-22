@@ -1,7 +1,17 @@
 "use client";
 
 import * as React from "react";
-import * as RechartsPrimitive from "recharts";
+// Defer-load specific Recharts components to avoid pulling the whole library
+import type { TooltipProps, LegendProps } from "recharts";
+const ResponsiveContainer = React.lazy(() =>
+  import("recharts").then((m) => ({ default: m.ResponsiveContainer }))
+);
+const Tooltip = React.lazy(() =>
+  import("recharts").then((m) => ({ default: m.Tooltip }))
+);
+const Legend = React.lazy(() =>
+  import("recharts").then((m) => ({ default: m.Legend }))
+);
 
 import { cn } from "./utils";
 
@@ -42,9 +52,7 @@ function ChartContainer({
   ...props
 }: React.ComponentProps<"div"> & {
   config: ChartConfig;
-  children: React.ComponentProps<
-    typeof RechartsPrimitive.ResponsiveContainer
-  >["children"];
+  children: React.ReactElement;
 }) {
   const uniqueId = React.useId();
   const chartId = `chart-${id || uniqueId.replace(/:/g, "")}`;
@@ -61,9 +69,9 @@ function ChartContainer({
         {...props}
       >
         <ChartStyle id={chartId} config={config} />
-        <RechartsPrimitive.ResponsiveContainer>
-          {children}
-        </RechartsPrimitive.ResponsiveContainer>
+        <React.Suspense fallback={null}>
+          <ResponsiveContainer>{children}</ResponsiveContainer>
+        </React.Suspense>
       </div>
     </ChartContext.Provider>
   );
@@ -102,7 +110,11 @@ ${colorConfig
   );
 };
 
-const ChartTooltip = RechartsPrimitive.Tooltip;
+const ChartTooltip: React.FC<TooltipProps<any, any>> = (props) => (
+  <React.Suspense fallback={null}>
+    <Tooltip {...(props as any)} />
+  </React.Suspense>
+);
 
 function ChartTooltipContent({
   active,
@@ -118,7 +130,7 @@ function ChartTooltipContent({
   color,
   nameKey,
   labelKey,
-}: React.ComponentProps<typeof RechartsPrimitive.Tooltip> &
+}: TooltipProps<any, any> &
   React.ComponentProps<"div"> & {
     hideLabel?: boolean;
     hideIndicator?: boolean;
@@ -248,7 +260,11 @@ function ChartTooltipContent({
   );
 }
 
-const ChartLegend = RechartsPrimitive.Legend;
+const ChartLegend: React.FC<LegendProps> = (props) => (
+  <React.Suspense fallback={null}>
+    <Legend {...(props as any)} />
+  </React.Suspense>
+);
 
 function ChartLegendContent({
   className,
@@ -257,7 +273,7 @@ function ChartLegendContent({
   verticalAlign = "bottom",
   nameKey,
 }: React.ComponentProps<"div"> &
-  Pick<RechartsPrimitive.LegendProps, "payload" | "verticalAlign"> & {
+  Pick<LegendProps, "payload" | "verticalAlign"> & {
     hideIcon?: boolean;
     nameKey?: string;
   }) {

@@ -1,4 +1,5 @@
-import { io, Socket } from 'socket.io-client';
+// Load socket.io only when a connection is actually requested
+type Socket = import('socket.io-client').Socket;
 import { config } from '../config/environment';
 
 export interface ProgressUpdate {
@@ -91,21 +92,29 @@ class SocketService {
     try {
       console.log('🔌 Attempting to connect to WebSocket at:', config.api.wsUrl);
       
-      this.socket = io(config.api.wsUrl, {
-        auth: { token },
-        transports: ['websocket'],
-        upgrade: true,
-        reconnection: true,
-        reconnectionAttempts: this.maxReconnectAttempts,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
-        timeout: 5000, // 5 second connection timeout
-      });
-
-      this.setupEventListeners();
-      this.connectionEnabled = true;
+      (async () => {
+        try {
+          const { io } = await import('socket.io-client');
+          this.socket = io(config.api.wsUrl!, {
+            auth: { token },
+            transports: ['websocket'],
+            upgrade: true,
+            reconnection: true,
+            reconnectionAttempts: this.maxReconnectAttempts,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            timeout: 5000,
+          });
+  
+          this.setupEventListeners();
+          this.connectionEnabled = true;
+        } catch (error) {
+          console.warn('🔌 Failed to initialize WebSocket connection:', error);
+          this.connectionEnabled = false;
+        }
+      })();
     } catch (error) {
-      console.warn('🔌 Failed to initialize WebSocket connection:', error);
+      console.warn('🔌 Failed to schedule WebSocket initialization:', error);
       this.connectionEnabled = false;
     }
   }

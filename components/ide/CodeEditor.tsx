@@ -6,15 +6,7 @@ import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } 
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { history, defaultKeymap, historyKeymap } from '@codemirror/commands';
 import { lintKeymap } from '@codemirror/lint';
-import { javascript } from '@codemirror/lang-javascript';
-import { python } from '@codemirror/lang-python';
-import { java } from '@codemirror/lang-java';
-import { cpp } from '@codemirror/lang-cpp';
-import { html } from '@codemirror/lang-html';
-import { css } from '@codemirror/lang-css';
-import { sql } from '@codemirror/lang-sql';
-import { rust } from '@codemirror/lang-rust';
-import { go } from '@codemirror/lang-go';
+// Language packs are loaded dynamically to keep the base bundle small
 
 export interface CodeEditorProps {
 	value: string;
@@ -47,33 +39,59 @@ export interface CodeEditorProps {
 	onReady?: () => void;
 }
 
-const mapLanguageToExtension = (lang: string) => {
+const loadLanguageExtension = async (lang: string) => {
 	const lower = (lang || '').toLowerCase();
-	switch (lower) {
-		case 'javascript':
-			return javascript({ jsx: true, typescript: false });
-		case 'typescript':
-			return javascript({ jsx: true, typescript: true });
-		case 'python':
-			return python();
-		case 'java':
-			return java();
-		case 'cpp':
-			return cpp();
-		case 'c':
-			return cpp();
-		case 'html':
-			return html();
-		case 'css':
-			return css();
-		case 'sql':
-			return sql();
-		case 'rust':
-			return rust();
-		case 'go':
-			return go();
-		default:
-			return javascript({ jsx: true });
+	try {
+		switch (lower) {
+			case 'typescript': {
+				const { javascript } = await import('@codemirror/lang-javascript');
+				return javascript({ jsx: true, typescript: true });
+			}
+			case 'javascript': {
+				const { javascript } = await import('@codemirror/lang-javascript');
+				return javascript({ jsx: true, typescript: false });
+			}
+			case 'python': {
+				const { python } = await import('@codemirror/lang-python');
+				return python();
+			}
+			case 'java': {
+				const { java } = await import('@codemirror/lang-java');
+				return java();
+			}
+			case 'cpp':
+			case 'c': {
+				const { cpp } = await import('@codemirror/lang-cpp');
+				return cpp();
+			}
+			case 'html': {
+				const { html } = await import('@codemirror/lang-html');
+				return html();
+			}
+			case 'css': {
+				const { css } = await import('@codemirror/lang-css');
+				return css();
+			}
+			case 'sql': {
+				const { sql } = await import('@codemirror/lang-sql');
+				return sql();
+			}
+			case 'rust': {
+				const { rust } = await import('@codemirror/lang-rust');
+				return rust();
+			}
+			case 'go': {
+				const { go } = await import('@codemirror/lang-go');
+				return go();
+			}
+			default: {
+				const { javascript } = await import('@codemirror/lang-javascript');
+				return javascript({ jsx: true });
+			}
+		}
+	} catch {
+		const { javascript } = await import('@codemirror/lang-javascript');
+		return javascript({ jsx: true });
 	}
 };
 
@@ -115,7 +133,6 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 		if (!containerRef.current) return;
 		if (viewRef.current) return;
 
-		const languageExt = mapLanguageToExtension(language);
 		const wrapExt = wordWrap === 'off' ? [] : [EditorView.lineWrapping];
 		const lineNumbersExt = showLineNumbers === 'off' ? [] : [lineNumbers(), highlightActiveLineGutter()];
 
@@ -130,7 +147,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 					...completionKeymap,
 					...lintKeymap,
 				]),
-				languageCompartment.of(languageExt),
+				languageCompartment.of([]),
 				editableCompartment.of(EditorView.editable.of(!readOnly)),
 				lineNumbersExt,
 				drawSelection(),
@@ -185,6 +202,13 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 		});
 
 		viewRef.current = view;
+
+			// Load language pack lazily after view creation
+			(async () => {
+				const ext = await loadLanguageExtension(language);
+				try { view.dispatch({ effects: languageCompartment.reconfigure(ext) }); } catch {}
+			})();
+
 			setIsReady(true);
 			onReady?.();
 
@@ -208,7 +232,13 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 	useEffect(() => {
 		const view = viewRef.current;
 		if (!view) return;
-		view.dispatch({ effects: languageCompartment.reconfigure(mapLanguageToExtension(language)) });
+		let cancelled = false;
+		(async () => {
+			const ext = await loadLanguageExtension(language);
+			if (cancelled) return;
+			try { view.dispatch({ effects: languageCompartment.reconfigure(ext) }); } catch {}
+		})();
+		return () => { cancelled = true; };
 	}, [language]);
 
 	useEffect(() => {
