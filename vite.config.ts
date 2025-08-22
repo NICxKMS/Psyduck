@@ -37,9 +37,9 @@ export default defineConfig(({ mode }) => {
     target: 'es2020',
     sourcemap: false,
     cssCodeSplit: true,
-    reportCompressedSize: false,
+    reportCompressedSize: true,
     modulePreload: { polyfill: false },
-    chunkSizeWarningLimit: 1600,
+    chunkSizeWarningLimit: 3500,
     rollupOptions: {
       output: {
         manualChunks(id) {
