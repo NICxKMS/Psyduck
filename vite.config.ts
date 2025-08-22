@@ -150,19 +150,8 @@ export default defineConfig(({ mode }) => {
             return 'floating-ui';
           }
 
-          // Fallback for other deps: size-based grouping to reduce tiny chunks
+          // Fallback for other deps: split by package name; size merge will coalesce tiny ones safely
           if (p.includes('/node_modules/')) {
-            // Try to group very small modules together
-            try {
-              const cleanId = id.split('?')[0];
-              const stat = fs.statSync(cleanId);
-              if (stat && stat.size < 20_000) {
-                return 'vendor-misc';
-              }
-            } catch {
-              // ignore virtual or missing files
-            }
-
             // Otherwise, split by package name
             const match = p.match(/\/node_modules\/(?:@[^/]+\/)?[^/]+/);
             if (match) {
